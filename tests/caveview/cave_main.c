@@ -112,8 +112,6 @@ float view_x_vel = 0;
 float view_z_vel = 0;
 float pending_view_x;
 float pending_view_z;
-float pending_view_x;
-float pending_view_z;
 
 void process_tick_raw(float dt)
 {
