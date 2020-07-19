@@ -850,7 +850,7 @@ char *stb_mprintf(const char *fmt, ...)
 
 #ifdef _WIN32
 
-#ifndef _WINDOWS_
+#if !defined(_WINDOWS_) && !defined(__MINGW32__)
 STB_EXTERN __declspec(dllimport) int __stdcall WriteConsoleA(void *, const void *, unsigned int, unsigned int *, void *);
 STB_EXTERN __declspec(dllimport) void * __stdcall GetStdHandle(unsigned int);
 STB_EXTERN __declspec(dllimport) int __stdcall SetConsoleTextAttribute(void *, unsigned short);
@@ -6684,7 +6684,7 @@ STB_EXTERN void   stb_reg_write_string(void *zreg, const char *str, const char *
 
 #define STB_HAS_REGISTRY
 
-#ifndef _WINDOWS_
+#if !defined(_WINDOWS_) && !defined(__MINGW32__)
 
 #define HKEY void *
 
@@ -6700,7 +6700,7 @@ STB_EXTERN __declspec(dllimport) long __stdcall RegSetValueExA ( HKEY hKey, cons
 STB_EXTERN __declspec(dllimport) long __stdcall  RegOpenKeyExA ( HKEY hKey, const char * lpSubKey,
     int ulOptions, int samDesired, HKEY * phkResult );
 
-#endif // _WINDOWS_
+#endif // _WINDOWS_ || __MINGW32__
 
 #define STB__REG_OPTION_NON_VOLATILE  0
 #define STB__REG_KEY_ALL_ACCESS       0x000f003f
