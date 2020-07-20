@@ -365,8 +365,6 @@ STBVXDEC void stbvox_set_buffer(stbvox_mesh_maker *mm, int mesh, int slot, void 
 // by the 'mesh' parameter), and each mesh can be made up of more than
 // one buffer (distinguished by the 'slot' parameter).
 //
-// Multiple meshes are under your control; use the 'selector' input
-// variable to choose which mesh each voxel's vertices are written to.
 // For example, you can use this to generate separate meshes for opaque
 // and transparent data.
 //
