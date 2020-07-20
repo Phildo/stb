@@ -1,4 +1,4 @@
-// stb_voxel_render.h - v0.89 - Sean Barrett, 2015 - public domain
+// stb_voxel_render.h - v0.89.1 - Sean Barrett, 2015 - public domain [will update to v0.90 when proposal is complete]
 //
 // This library helps render large-scale "voxel" worlds for games,
 // in this case, one with blocks that can have textures and that
@@ -192,6 +192,7 @@
 //
 // VERSION HISTORY
 //
+//   0.90   (2020-07-20)  add option for GL_EXT_multiview VR rendering [in progress]
 //   0.89   (2020-02-02)  bugfix in sample code
 //   0.88   (2019-03-04)  fix warnings
 //   0.87   (2019-02-25)  fix warning
@@ -278,6 +279,10 @@ extern "C" {
 //
 //    STBVOX_CONFIG_HLSL
 //        NOT IMPLEMENTED! Define HLSL shaders instead of GLSL shaders
+//
+//    STBVOX_CONFIG_MULTIVIEW
+//        define glsl shaders for use with #extension GL_EXT_multiview,
+//        including doubled camera uniforms, view uniforms, indexed with gl_ViewIndex
 //
 //    STBVOX_CONFIG_PREFER_TEXBUFFER
 //        Stores many of the uniform arrays in texture buffers instead,
@@ -574,6 +579,7 @@ enum                           //  V  V
    STBVOX_UNIFORM_texgen,      //  Y  Y   table of texgen vectors, internal-only
    STBVOX_UNIFORM_ambient,     //  n      lighting & fog info, see above
    STBVOX_UNIFORM_camera_pos,  //  Y      camera position in global voxel space (for lighting & fog)
+   STBVOX_UNIFORM_viewmat,     //  n      model * view * projection matrix
 
    STBVOX_UNIFORM_count,
 };
@@ -585,6 +591,7 @@ enum
    STBVOX_UNIFORM_TYPE_vec2,
    STBVOX_UNIFORM_TYPE_vec3,
    STBVOX_UNIFORM_TYPE_vec4,
+   STBVOX_UNIFORM_TYPE_mat4,
 };
 
 struct stbvox_uniform_info
@@ -605,7 +612,11 @@ struct stbvox_uniform_info
 #if 0
 // Run this once per frame before drawing all the meshes.
 // You still need to separately set the 'transform' uniform for every mesh.
-void setup_uniforms(GLuint shader, float camera_pos[4], GLuint tex1, GLuint tex2)
+#ifndef STBVOX_CONFIG_MULTIVIEW
+void setup_uniforms(GLuint shader, float camera_pos[4], float viewmat[4][4], GLuint tex1, GLuint tex2)
+#else
+void setup_uniforms(GLuint shader, float camera_pos[2][4], float viewmat[2][4][4], GLuint tex1, GLuint tex2)
+#endif
 {
    int i;
    glUseProgram(shader); // so uniform binding works
@@ -615,6 +626,10 @@ void setup_uniforms(GLuint shader, float camera_pos[4], GLuint tex1, GLuint tex2
          GLint loc = glGetUniformLocation(shader, sui.name);
          if (loc != -1) {
             switch (i) {
+               case STBVOX_UNIFORM_viewmat:
+                  glUniformMatrix4fv(loc, sui.array_length, GL_FALSE, viewmat);
+                  break;
+
                case STBVOX_UNIFORM_camera_pos: // only needed for fog
                   glUniform4fv(loc, sui.array_length, camera_pos);
                   break;
@@ -1315,6 +1330,15 @@ struct stbvox_mesh_maker
 #define STBVOX_ICONFIG_OPENGL_3_1_COMPATIBILITY
 #endif
 
+#ifdef STBVOX_CONFIG_MULTIVIEW
+  #ifndef STBVOX_ICONFIG_GLSL
+  #error "STBVOX_CONFIG_MULTIVIEW requires glsl shaders (STBVOX_CONFIG_GLSL)"
+  #endif
+  #ifdef STBVOX_ICONFIG_OPENGL_MODELVIEW
+  #error "STBVOX_CONFIG_OPENGL_MODELVIEW is incompatible with STBVOX_CONFIG_MULTIVIEW"
+  #endif
+#endif
+
 #if defined(STBVOX_ICONFIG_VERTEX_32)
    typedef stbvox_uint32 stbvox_mesh_vertex;
    #define stbvox_vertex_encode(x,y,z,ao,texlerp) \
@@ -1586,7 +1610,11 @@ static const char *stbvox_vertex_program =
       "uniform vec3 transform[3];\n"
 
       // per-frame data
+    #ifndef STBVOX_CONFIG_MULTIVIEW
       "uniform vec4 camera_pos;\n"  // 4th value is used for arbitrary hacking
+    #else
+      "uniform vec4 camera_pos[2];\n"  // 4th value is used for arbitrary hacking
+    #endif
 
       // to simplify things, we avoid using more than 256 uniform vectors
       // in fragment shader to avoid possible 1024 component limit, so
@@ -1594,7 +1622,11 @@ static const char *stbvox_vertex_program =
       "uniform vec3 normal_table[32];\n"
 
       #ifndef STBVOX_CONFIG_OPENGL_MODELVIEW
+        #ifndef STBVOX_CONFIG_MULTIVIEW
          "uniform mat4x4 model_view;\n"
+        #else
+         "uniform mat4x4 model_view[2];\n"
+        #endif
       #endif
 
       // fragment output data
@@ -1628,11 +1660,19 @@ static const char *stbvox_vertex_program =
 
       #ifdef STBVOX_DEBUG_TEST_NORMALS
          "   if ((facedata.w & 28u) == 16u || (facedata.w & 28u) == 24u)\n"
+        #ifndef STBVOX_CONFIG_MULTIVIEW
          "      position += vnormal.xyz * camera_pos.w;\n"
+        #else
+         "      position += vnormal.xyz * camera_pos[gl_ViewIndex].w;\n"
+        #endif
       #endif
 
       #ifndef STBVOX_CONFIG_OPENGL_MODELVIEW
+        #ifndef STBVOX_CONFIG_MULTIVIEW
          "   gl_Position = model_view * vec4(position,1.0);\n"
+        #else
+         "   gl_Position = model_view[gl_ViewIndex] * vec4(position,1.0);\n"
+        #endif
       #else
          "   gl_Position = gl_ModelViewProjectionMatrix * vec4(position,1.0);\n"
       #endif
@@ -1666,7 +1706,11 @@ static const char *stbvox_fragment_program =
       "uniform vec3 transform[3];\n"
 
       // per-frame data
+      #ifndef STBVOX_CONFIG_MULTIVIEW
       "uniform vec4 camera_pos;\n"  // 4th value is used for arbitrary hacking
+      #else
+      "uniform vec4 camera_pos[2];\n"  // 4th value is used for arbitrary hacking
+      #endif
 
       // probably constant data
       "uniform vec4 ambient[4];\n"
@@ -1817,7 +1861,11 @@ static const char *stbvox_fragment_program =
       "      lit_color = albedo;\n"
 
       #if defined(STBVOX_ICONFIG_FOG) || defined(STBVOX_CONFIG_FOG_SMOOTHSTEP)
+        #ifndef STBVOX_CONFIG_MULTIVIEW
          "   vec3 dist = voxelspace_pos + (transform[1] - camera_pos.xyz);\n"
+        #else
+         "   vec3 dist = voxelspace_pos + (transform[1] - camera_pos[gl_ViewIndex].xyz);\n"
+        #endif
          "   lit_color = compute_fog(lit_color, dist, fragment_alpha);\n"
       #endif
 
@@ -1981,6 +2029,13 @@ STBVXDEC char *stbvox_get_fragment_shader_alpha_only(void)
 }
 
 static float stbvox_dummy_transform[3][3];
+static float stbvox_dummy_mat[4][4] =
+{
+  {1.0f, 0.0f, 0.0f, 0.0f},
+  {0.0f, 1.0f, 0.0f, 0.0f},
+  {0.0f, 0.0f, 1.0f, 0.0f},
+  {0.0f, 0.0f, 0.0f, 1.0f},
+};
 
 #ifdef STBVOX_CONFIG_PREFER_TEXBUFFER
 #define STBVOX_TEXBUF 1
@@ -1998,7 +2053,13 @@ static stbvox_uniform_info stbvox_uniforms[] =
    { STBVOX_UNIFORM_TYPE_vec3     , 12,  32, (char*) "normal_table" , stbvox_default_normals[0]   },
    { STBVOX_UNIFORM_TYPE_vec3     , 12,  64, (char*) "texgen"       , stbvox_default_texgen[0][0], STBVOX_TEXBUF },
    { STBVOX_UNIFORM_TYPE_vec4     , 16,   4, (char*) "ambient"      , stbvox_default_ambient[0]   },
+#ifndef STBVOX_CONFIG_MULTIVIEW
    { STBVOX_UNIFORM_TYPE_vec4     , 16,   1, (char*) "camera_pos"   , stbvox_dummy_transform[0]   },
+   { STBVOX_UNIFORM_TYPE_mat4     , 64,   1, (char*) "model_view"   , stbvox_dummy_transform[0]   },
+#else
+   { STBVOX_UNIFORM_TYPE_vec4     , 16,   2, (char*) "camera_pos"   , stbvox_dummy_transform[0]   },
+   { STBVOX_UNIFORM_TYPE_mat4     , 64,   2, (char*) "model_view"   , stbvox_dummy_mat[0]         },
+#endif
 };
 
 STBVXDEC int stbvox_get_uniform_info(stbvox_uniform_info *info, int uniform)
