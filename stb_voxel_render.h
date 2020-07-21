@@ -280,9 +280,14 @@ extern "C" {
 //    STBVOX_CONFIG_HLSL
 //        NOT IMPLEMENTED! Define HLSL shaders instead of GLSL shaders
 //
+//    STBVOX_CONFIG_OPENGL_4_5
+//        define glsl shaders in line with the glsl4.5 spec,
+//        allows easy conversion to SPV, for use with Vulkan
+//
 //    STBVOX_CONFIG_MULTIVIEW
 //        define glsl shaders for use with #extension GL_EXT_multiview,
-//        including doubled camera uniforms, view uniforms, indexed with gl_ViewIndex
+//        including doubled camera uniforms, view uniforms, indexed with gl_ViewIndex.
+//        forces STBVOX_CONFIG_OPENGL_4_5
 //
 //    STBVOX_CONFIG_PREFER_TEXBUFFER
 //        Stores many of the uniform arrays in texture buffers instead,
@@ -1332,6 +1337,10 @@ struct stbvox_mesh_maker
 #define STBVOX_ICONFIG_OPENGL_3_1_COMPATIBILITY
 #endif
 
+#ifdef STBVOX_CONFIG_OPENGL_4_5
+  #define STBVOX_ICONFIG_OPENGL_4_5
+#endif
+
 #ifdef STBVOX_CONFIG_MULTIVIEW
   #ifndef STBVOX_ICONFIG_GLSL
   #error "STBVOX_CONFIG_MULTIVIEW requires glsl shaders (STBVOX_CONFIG_GLSL)"
@@ -1339,6 +1348,7 @@ struct stbvox_mesh_maker
   #ifdef STBVOX_ICONFIG_OPENGL_MODELVIEW
   #error "STBVOX_CONFIG_OPENGL_MODELVIEW is incompatible with STBVOX_CONFIG_MULTIVIEW"
   #endif
+  #define STBVOX_ICONFIG_OPENGL_4_5
 #endif
 
 #if defined(STBVOX_ICONFIG_VERTEX_32)
@@ -1585,6 +1595,8 @@ static void stbvox_build_default_palette(void)
    #define STBVOX_SHADER_VERSION "#version 150 compatibility\n"
 #elif defined(STBVOX_ICONFIG_OPENGL_3_0)
    #define STBVOX_SHADER_VERSION "#version 130\n"
+#elif defined(STBVOX_ICONFIG_OPENGL_4_5)
+   #define STBVOX_SHADER_VERSION "#version 450\n"
 #elif defined(STBVOX_ICONFIG_GLSL)
    #define STBVOX_SHADER_VERSION "#version 150\n"
 #else
@@ -1594,7 +1606,8 @@ static void stbvox_build_default_palette(void)
 static const char *stbvox_vertex_program =
 {
       STBVOX_SHADER_VERSION
-
+ //don't bother attempting to interleave STBVOX_ICONFIG_OPENGL_4_5 definitions
+#if !defined(STBVOX_ICONFIG_OPENGL_4_5)
    #ifdef STBVOX_ICONFIG_FACE_ATTRIBUTE  // NOT TAG_face_sampled
       "in uvec4 attr_face;\n"
    #else
@@ -1612,11 +1625,7 @@ static const char *stbvox_vertex_program =
       "uniform vec3 transform[3];\n"
 
       // per-frame data
-    #ifndef STBVOX_CONFIG_MULTIVIEW
       "uniform vec4 camera_pos;\n"  // 4th value is used for arbitrary hacking
-    #else
-      "uniform vec4 camera_pos[2];\n"  // 4th value is used for arbitrary hacking
-    #endif
 
       // to simplify things, we avoid using more than 256 uniform vectors
       // in fragment shader to avoid possible 1024 component limit, so
@@ -1624,11 +1633,7 @@ static const char *stbvox_vertex_program =
       "uniform vec3 normal_table[32];\n"
 
       #ifndef STBVOX_CONFIG_OPENGL_MODELVIEW
-        #ifndef STBVOX_CONFIG_MULTIVIEW
          "uniform mat4x4 model_view;\n"
-        #else
-         "uniform mat4x4 model_view[2];\n"
-        #endif
       #endif
 
       // fragment output data
@@ -1662,24 +1667,127 @@ static const char *stbvox_vertex_program =
 
       #ifdef STBVOX_DEBUG_TEST_NORMALS
          "   if ((facedata.w & 28u) == 16u || (facedata.w & 28u) == 24u)\n"
-        #ifndef STBVOX_CONFIG_MULTIVIEW
          "      position += vnormal.xyz * camera_pos.w;\n"
-        #else
-         "      position += vnormal.xyz * camera_pos[gl_ViewIndex].w;\n"
-        #endif
       #endif
 
       #ifndef STBVOX_CONFIG_OPENGL_MODELVIEW
-        #ifndef STBVOX_CONFIG_MULTIVIEW
          "   gl_Position = model_view * vec4(position,1.0);\n"
-        #else
-         "   gl_Position = model_view[gl_ViewIndex] * vec4(position,1.0);\n"
-        #endif
       #else
          "   gl_Position = gl_ModelViewProjectionMatrix * vec4(position,1.0);\n"
       #endif
 
       "}\n"
+#else
+   #ifdef STBVOX_CONFIG_MULTIVIEW
+      "#extension GL_EXT_multiview : enable\n"
+   #endif
+
+   #ifdef STBVOX_ICONFIG_FACE_ATTRIBUTE  // NOT TAG_face_sampled
+      "layout(location = 0) in uvec4 attr_face;\n"
+   #else
+      "uniform usamplerBuffer facearray;\n"
+   #endif
+
+   #ifdef STBVOX_ICONFIG_FACE_ARRAY_2
+      "uniform usamplerBuffer facearray2;\n"
+   #endif
+
+      // vertex input data
+      "layout(location = 1) in uint attr_vertex;\n"
+
+      // to simplify things, we avoid using more than 256 uniform vectors
+      // in fragment shader to avoid possible 1024 component limit, so
+      // we access this table in the fragment shader.
+      "layout(set = 0, binding = 0) uniform StaticUBO {\n"
+      "vec3 normal_table[32];\n"
+      "vec4 ambient[4];\n"
+      #ifndef STBVOX_ICONFIG_UNTEXTURED
+
+         #ifndef STBVOX_CONFIG_PREFER_TEXBUFFER
+            "vec4 color_table[64];\n"
+            "vec4 texscale[64];\n" // instead of 128, to avoid running out of uniforms
+            "vec3 texgen[64];\n"
+         #endif
+      #endif
+      "} subo;\n"
+
+      #ifndef STBVOX_ICONFIG_UNTEXTURED
+         // generally constant data
+         "layout(set = 0, binding = 3) uniform sampler2DArray tex_array[2];\n"
+      #endif
+
+      #ifdef STBVOX_CONFIG_PREFER_TEXBUFFER
+        "layout(set = 0, binding = 4) uniform samplerBuffer color_table;\n"
+        "layout(set = 0, binding = 5) uniform samplerBuffer texscale;\n"
+        "layout(set = 0, binding = 6) uniform samplerBuffer texgen;\n"
+      #endif
+
+      // per-buffer data
+      "layout(set = 0, binding = 1) uniform ChunkUBO { vec3 transform[3]; } cubo;\n"
+
+      // per-frame data
+      "layout(set = 0, binding = 2) uniform PerspectiveUBO {\n"
+    #ifndef STBVOX_CONFIG_MULTIVIEW
+      "vec4 camera_pos;\n"  // 4th value is used for arbitrary hacking
+    #else
+      "vec4 camera_pos[2];\n"  // 4th value is used for arbitrary hacking
+    #endif
+
+    #ifndef STBVOX_CONFIG_OPENGL_MODELVIEW
+      #ifndef STBVOX_CONFIG_MULTIVIEW
+       "mat4x4 model_view;\n"
+      #else
+       "mat4x4 model_view[2];\n"
+      #endif
+    #endif
+      "} pubo;\n"
+
+      // fragment output data
+      "layout(location = 0) flat out uvec4  facedata;\n"
+      "layout(location = 1)      out  vec3  voxelspace_pos;\n"
+      "layout(location = 2)      out  vec3  vnormal;\n"
+      "layout(location = 3)      out float  texlerp;\n"
+      "layout(location = 4)      out float  amb_occ;\n"
+
+      // @TODO handle the HLSL way to do this
+      "void main()\n"
+      "{\n"
+      #ifdef STBVOX_ICONFIG_FACE_ATTRIBUTE
+         "   facedata = attr_face;\n"
+      #else
+         "   int faceID = gl_VertexID >> 2;\n"
+         "   facedata   = texelFetch(facearray, faceID);\n"
+      #endif
+
+      // extract data for vertex
+      "   vec3 offset;\n"
+      "   offset.x = float( (attr_vertex       ) & 127u );\n"             // a[0..6]
+      "   offset.y = float( (attr_vertex >>  7u) & 127u );\n"             // a[7..13]
+      "   offset.z = float( (attr_vertex >> 14u) & 511u );\n"             // a[14..22]
+      "   amb_occ  = float( (attr_vertex >> 23u) &  63u ) / 63.0;\n"      // a[23..28]
+      "   texlerp  = float( (attr_vertex >> 29u)        ) /  7.0;\n"      // a[29..31]
+
+      "   vnormal = subo.normal_table[(facedata.w>>2u) & 31u];\n"
+      "   voxelspace_pos = offset * cubo.transform[0];\n"  // mesh-to-object scale
+      "   vec3 position  = voxelspace_pos + cubo.transform[1];\n"  // mesh-to-object translate
+
+      #ifdef STBVOX_DEBUG_TEST_NORMALS
+         "   if ((facedata.w & 28u) == 16u || (facedata.w & 28u) == 24u)\n"
+        #ifndef STBVOX_CONFIG_MULTIVIEW
+         "      position += vnormal.xyz * pubo.camera_pos.w;\n"
+        #else
+         "      position += vnormal.xyz * pubo.camera_pos[gl_ViewIndex].w;\n"
+        #endif
+      #endif
+
+      #ifndef STBVOX_CONFIG_MULTIVIEW
+       "   gl_Position = pubo.model_view * vec4(position,1.0);\n"
+      #else
+       "   gl_Position = pubo.model_view[gl_ViewIndex] * vec4(position,1.0);\n"
+      #endif
+
+      "}\n"
+#endif
 };
 
 
@@ -1687,6 +1795,8 @@ static const char *stbvox_fragment_program =
 {
       STBVOX_SHADER_VERSION
 
+ //don't bother attempting to interleave STBVOX_ICONFIG_OPENGL_4_5 definitions
+#if !defined(STBVOX_ICONFIG_OPENGL_4_5)
       // rlerp is lerp but with t on the left, like god intended
       #if defined(STBVOX_ICONFIG_GLSL)
          "#define rlerp(t,x,y) mix(x,y,t)\n"
@@ -1708,11 +1818,7 @@ static const char *stbvox_fragment_program =
       "uniform vec3 transform[3];\n"
 
       // per-frame data
-      #ifndef STBVOX_CONFIG_MULTIVIEW
       "uniform vec4 camera_pos;\n"  // 4th value is used for arbitrary hacking
-      #else
-      "uniform vec4 camera_pos[2];\n"  // 4th value is used for arbitrary hacking
-      #endif
 
       // probably constant data
       "uniform vec4 ambient[4];\n"
@@ -1863,10 +1969,242 @@ static const char *stbvox_fragment_program =
       "      lit_color = albedo;\n"
 
       #if defined(STBVOX_ICONFIG_FOG) || defined(STBVOX_CONFIG_FOG_SMOOTHSTEP)
-        #ifndef STBVOX_CONFIG_MULTIVIEW
          "   vec3 dist = voxelspace_pos + (transform[1] - camera_pos.xyz);\n"
+         "   lit_color = compute_fog(lit_color, dist, fragment_alpha);\n"
+      #endif
+
+      #ifdef STBVOX_CONFIG_UNPREMULTIPLY
+      "   vec4 final_color = vec4(lit_color/fragment_alpha, fragment_alpha);\n"
+      #else
+      "   vec4 final_color = vec4(lit_color, fragment_alpha);\n"
+      #endif
+      "   outcolor = final_color;\n"
+      "}\n"
+
+   #ifdef STBVOX_CONFIG_LIGHTING_SIMPLE
+      "\n"
+      "uniform vec3 light_source[2];\n"
+      "vec3 compute_lighting(vec3 pos, vec3 norm, vec3 albedo, vec3 ambient)\n"
+      "{\n"
+      "   vec3 light_dir = light_source[0] - pos;\n"
+      "   float lambert = dot(light_dir, norm) / dot(light_dir, light_dir);\n"
+      "   vec3 diffuse = clamp(light_source[1] * clamp(lambert, 0.0, 1.0), 0.0, 1.0);\n"
+      "   return (diffuse + ambient) * albedo;\n"
+      "}\n"
+   #endif
+
+   #ifdef STBVOX_CONFIG_FOG_SMOOTHSTEP
+      "\n"
+      "vec3 compute_fog(vec3 color, vec3 relative_pos, float fragment_alpha)\n"
+      "{\n"
+      "   float f = dot(relative_pos,relative_pos)*ambient[3].w;\n"
+      //"   f = rlerp(f, -2,1);\n"
+      "   f = clamp(f, 0.0, 1.0);\n"
+      "   f = 3.0*f*f - 2.0*f*f*f;\n" // smoothstep
+      //"   f = f*f;\n"  // fade in more smoothly
+      #ifdef STBVOX_CONFIG_PREMULTIPLIED_ALPHA
+      "   return rlerp(f, color.xyz, ambient[3].xyz*fragment_alpha);\n"
+      #else
+      "   return rlerp(f, color.xyz, ambient[3].xyz);\n"
+      #endif
+      "}\n"
+   #endif
+#else
+   #ifdef STBVOX_CONFIG_MULTIVIEW
+      "#extension GL_EXT_multiview : enable\n"
+   #endif
+
+      // rlerp is lerp but with t on the left, like god intended
+     "#define rlerp(t,x,y) mix(x,y,t)\n"
+
+      // vertex-shader output data
+      "layout(location = 0) flat in uvec4  facedata;\n"
+      "layout(location = 1)      in  vec3  voxelspace_pos;\n"
+      "layout(location = 2)      in  vec3  vnormal;\n"
+      "layout(location = 3)      in float  texlerp;\n"
+      "layout(location = 4)      in float  amb_occ;\n"
+
+      // to simplify things, we avoid using more than 256 uniform vectors
+      // in fragment shader to avoid possible 1024 component limit, so
+      // we access this table in the fragment shader.
+      "layout(set = 0, binding = 0) uniform StaticUBO {\n"
+      "vec3 normal_table[32];\n"
+      "vec4 ambient[4];\n"
+      #ifndef STBVOX_ICONFIG_UNTEXTURED
+         #ifndef STBVOX_CONFIG_PREFER_TEXBUFFER
+            "vec4 color_table[64];\n"
+            "vec4 texscale[64];\n" // instead of 128, to avoid running out of uniforms
+            "vec3 texgen[64];\n"
+         #endif
+      #endif
+      "} subo;\n"
+
+      #ifndef STBVOX_ICONFIG_UNTEXTURED
+         // generally constant data
+         "layout(set = 0, binding = 3) uniform sampler2DArray tex_array[2];\n"
+      #endif
+
+      #ifdef STBVOX_CONFIG_PREFER_TEXBUFFER
+        "layout(set = 0, binding = 4) uniform samplerBuffer color_table;\n"
+        "layout(set = 0, binding = 5) uniform samplerBuffer texscale;\n"
+        "layout(set = 0, binding = 6) uniform samplerBuffer texgen;\n"
+      #endif
+
+      // per-buffer data
+      "layout(set = 0, binding = 1) uniform ChunkUBO { vec3 transform[3]; } cubo;\n"
+
+      // per-frame data
+      "layout(set = 0, binding = 2) uniform PerspectiveUBO {\n"
+    #ifndef STBVOX_CONFIG_MULTIVIEW
+      "vec4 camera_pos;\n"  // 4th value is used for arbitrary hacking
+    #else
+      "vec4 camera_pos[2];\n"  // 4th value is used for arbitrary hacking
+    #endif
+
+    #ifndef STBVOX_CONFIG_OPENGL_MODELVIEW
+      #ifndef STBVOX_CONFIG_MULTIVIEW
+       "mat4x4 model_view;\n"
+      #else
+       "mat4x4 model_view[2];\n"
+      #endif
+    #endif
+      "} pubo;\n"
+
+      "layout(location = 0) out vec4  outcolor;\n"
+
+      #if defined(STBVOX_CONFIG_LIGHTING) || defined(STBVOX_CONFIG_LIGHTING_SIMPLE)
+      "vec3 compute_lighting(vec3 pos, vec3 norm, vec3 albedo, vec3 ambient);\n"
+      #endif
+      #if defined(STBVOX_CONFIG_FOG) || defined(STBVOX_CONFIG_FOG_SMOOTHSTEP)
+      "vec3 compute_fog(vec3 color, vec3 relative_pos, float fragment_alpha);\n"
+      #endif
+
+      "void main()\n"
+      "{\n"
+      "   vec3 albedo;\n"
+      "   float fragment_alpha;\n"
+
+      #ifndef STBVOX_ICONFIG_UNTEXTURED
+         // unpack the values
+         "   uint tex1_id = facedata.x;\n"
+         "   uint tex2_id = facedata.y;\n"
+         "   uint texprojid = facedata.w & 31u;\n"
+         "   uint color_id  = facedata.z;\n"
+
+         #ifndef STBVOX_CONFIG_PREFER_TEXBUFFER
+            // load from uniforms / texture buffers
+            "   vec3 texgen_s = subo.texgen[texprojid];\n"
+            "   vec3 texgen_t = subo.texgen[texprojid+32u];\n"
+            "   float tex1_scale = subo.texscale[tex1_id & 63u].x;\n"
+            "   vec4 color = subo.color_table[color_id & 63u];\n"
+            #ifndef STBVOX_CONFIG_DISABLE_TEX2
+            "   vec4 tex2_props = subo.texscale[tex2_id & 63u];\n"
+            #endif
+         #else
+            "   vec3 texgen_s = texelFetch(texgen, int(texprojid)).xyz;\n"
+            "   vec3 texgen_t = texelFetch(texgen, int(texprojid+32u)).xyz;\n"
+            "   float tex1_scale = texelFetch(texscale, int(tex1_id & 127u)).x;\n"
+            "   vec4 color = texelFetch(color_table, int(color_id & 63u));\n"
+            #ifndef STBVOX_CONFIG_DISABLE_TEX2
+            "   vec4 tex2_props = texelFetch(texscale, int(tex1_id & 127u));\n"
+            #endif
+         #endif
+
+         #ifndef STBVOX_CONFIG_DISABLE_TEX2
+         "   float tex2_scale = tex2_props.y;\n"
+         "   bool texblend_mode = tex2_props.z != 0.0;\n"
+         #endif
+         "   vec2 texcoord;\n"
+         "   vec3 texturespace_pos = voxelspace_pos + cubo.transform[2].xyz;\n"
+         "   texcoord.s = dot(texturespace_pos, texgen_s);\n"
+         "   texcoord.t = dot(texturespace_pos, texgen_t);\n"
+
+         "   vec2  texcoord_1 = tex1_scale * texcoord;\n"
+         #ifndef STBVOX_CONFIG_DISABLE_TEX2
+         "   vec2  texcoord_2 = tex2_scale * texcoord;\n"
+         #endif
+
+         #ifdef STBVOX_CONFIG_TEX1_EDGE_CLAMP
+         "   texcoord_1 = texcoord_1 - floor(texcoord_1);\n"
+         "   vec4 tex1 = textureGrad(tex_array[0], vec3(texcoord_1, float(tex1_id)), dFdx(tex1_scale*texcoord), dFdy(tex1_scale*texcoord));\n"
+         #else
+         "   vec4 tex1 = texture(tex_array[0], vec3(texcoord_1, float(tex1_id)));\n"
+         #endif
+
+         #ifndef STBVOX_CONFIG_DISABLE_TEX2
+         #ifdef STBVOX_CONFIG_TEX2_EDGE_CLAMP
+         "   texcoord_2 = texcoord_2 - floor(texcoord_2);\n"
+         "   vec4 tex2 = textureGrad(tex_array[0], vec3(texcoord_2, float(tex2_id)), dFdx(tex2_scale*texcoord), dFdy(tex2_scale*texcoord));\n"
+         #else
+         "   vec4 tex2 = texture(tex_array[1], vec3(texcoord_2, float(tex2_id)));\n"
+         #endif
+         #endif
+
+         "   bool emissive = (color.a > 1.0);\n"
+         "   color.a = min(color.a, 1.0);\n"
+
+         // recolor textures
+         "   if ((color_id &  64u) != 0u) tex1.rgba *= color.rgba;\n"
+         "   fragment_alpha = tex1.a;\n"
+         #ifndef STBVOX_CONFIG_DISABLE_TEX2
+            "   if ((color_id & 128u) != 0u) tex2.rgba *= color.rgba;\n"
+
+            #ifdef STBVOX_CONFIG_PREMULTIPLIED_ALPHA
+            "   tex2.rgba *= texlerp;\n"
+            #else
+            "   tex2.a *= texlerp;\n"
+            #endif
+
+            "   if (texblend_mode)\n"
+            "      albedo = tex1.xyz * rlerp(tex2.a, vec3(1.0,1.0,1.0), 2.0*tex2.xyz);\n"
+            "   else {\n"
+            #ifdef STBVOX_CONFIG_PREMULTIPLIED_ALPHA
+            "      albedo = (1.0-tex2.a)*tex1.xyz + tex2.xyz;\n"
+            #else
+            "      albedo = rlerp(tex2.a, tex1.xyz, tex2.xyz);\n"
+            #endif
+            "      fragment_alpha = tex1.a*(1-tex2.a)+tex2.a;\n"
+            "   }\n"
+         #else
+            "      albedo = tex1.xyz;\n"
+         #endif
+
+      #else // UNTEXTURED
+         "   vec4 color;"
+         "   color.xyz = vec3(facedata.xyz) / 255.0;\n"
+         "   bool emissive = false;\n"
+         "   albedo = color.xyz;\n"
+         "   fragment_alpha = 1.0;\n"
+      #endif
+
+      #ifdef STBVOX_ICONFIG_VARYING_VERTEX_NORMALS
+         // currently, there are no modes that trigger this path; idea is that there
+         // could be a couple of bits per vertex to perturb the normal to e.g. get curved look
+         "   vec3 normal = normalize(vnormal);\n"
+      #else
+         "   vec3 normal = vnormal;\n"
+      #endif
+
+      "   vec3 ambient_color = dot(normal, subo.ambient[0].xyz) * subo.ambient[1].xyz + subo.ambient[2].xyz;\n"
+
+      "   ambient_color = clamp(ambient_color, 0.0, 1.0);"
+      "   ambient_color *= amb_occ;\n"
+
+      "   vec3 lit_color;\n"
+      "   if (!emissive)\n"
+      #if defined(STBVOX_ICONFIG_LIGHTING) || defined(STBVOX_CONFIG_LIGHTING_SIMPLE)
+         "      lit_color = compute_lighting(voxelspace_pos + cubo.transform[1], normal, albedo, ambient_color);\n"
+      #else
+         "      lit_color = albedo * ambient_color ;\n"
+      #endif
+      "   else\n"
+      "      lit_color = albedo;\n"
+
+      #if defined(STBVOX_ICONFIG_FOG) || defined(STBVOX_CONFIG_FOG_SMOOTHSTEP)
+        #ifndef STBVOX_CONFIG_MULTIVIEW
+         "   vec3 dist = voxelspace_pos + (cubo.transform[1] - pubo.camera_pos.xyz);\n"
         #else
-         "   vec3 dist = voxelspace_pos + (transform[1] - camera_pos[gl_ViewIndex].xyz);\n"
+         "   vec3 dist = voxelspace_pos + (cubo.transform[1] - pubo.camera_pos[gl_ViewIndex].xyz);\n"
         #endif
          "   lit_color = compute_fog(lit_color, dist, fragment_alpha);\n"
       #endif
@@ -1907,6 +2245,7 @@ static const char *stbvox_fragment_program =
       #endif
       "}\n"
    #endif
+#endif
 };
 
 
@@ -2100,7 +2439,7 @@ static unsigned char stbvox_rotate_face[6][4] =
 
 #define STBVOX_ROTATE(x,r)   stbvox_rotate_face[x][r] // (((x)+(r))&3)
 
-stbvox_mesh_face stbvox_compute_mesh_face_value(stbvox_mesh_maker *mm, stbvox_rotate rot, int face, int v_off, int normal)
+STBVXDEC stbvox_mesh_face stbvox_compute_mesh_face_value(stbvox_mesh_maker *mm, stbvox_rotate rot, int face, int v_off, int normal)
 {
    stbvox_mesh_face face_data = { 0 };
    stbvox_block_type bt = mm->input.blocktype[v_off];
@@ -2709,7 +3048,7 @@ static unsigned char stbvox_face_up_normal_123[4][4][4] =
 };
 #endif
 
-void stbvox_get_quad_vertex_pointer(stbvox_mesh_maker *mm, int mesh, stbvox_mesh_vertex **vertices, stbvox_mesh_face face)
+STBVXDEC void stbvox_get_quad_vertex_pointer(stbvox_mesh_maker *mm, int mesh, stbvox_mesh_vertex **vertices, stbvox_mesh_face face)
 {
    char *p = mm->output_cur[mesh][0];
    int step = mm->output_step[mesh][0];
@@ -2734,7 +3073,7 @@ void stbvox_get_quad_vertex_pointer(stbvox_mesh_maker *mm, int mesh, stbvox_mesh
    #endif
 }
 
-void stbvox_make_mesh_for_face(stbvox_mesh_maker *mm, stbvox_rotate rot, int face, int v_off, stbvox_pos pos, stbvox_mesh_vertex vertbase, stbvox_mesh_vertex *face_coord, unsigned char mesh, int normal)
+STBVXDEC void stbvox_make_mesh_for_face(stbvox_mesh_maker *mm, stbvox_rotate rot, int face, int v_off, stbvox_pos pos, stbvox_mesh_vertex vertbase, stbvox_mesh_vertex *face_coord, unsigned char mesh, int normal)
 {
    stbvox_mesh_face face_data = stbvox_compute_mesh_face_value(mm,rot,face,v_off, normal);
 
