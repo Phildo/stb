@@ -289,6 +289,9 @@ extern "C" {
 //        including doubled camera uniforms, view uniforms, indexed with gl_ViewIndex.
 //        forces STBVOX_CONFIG_OPENGL_4_5
 //
+//    STBVOX_CONFIG_SIMPLE_TEXTURE
+//        Rather than use an array of 2d_array
+//
 //    STBVOX_CONFIG_PREFER_TEXBUFFER
 //        Stores many of the uniform arrays in texture buffers instead,
 //        so they can be larger and may be more efficient on some hardware.
@@ -1711,22 +1714,8 @@ static const char *stbvox_vertex_program =
       #endif
       "} subo;\n"
 
-      #ifndef STBVOX_ICONFIG_UNTEXTURED
-         // generally constant data
-         "layout(set = 0, binding = 3) uniform sampler2DArray tex_array[2];\n"
-      #endif
-
-      #ifdef STBVOX_CONFIG_PREFER_TEXBUFFER
-        "layout(set = 0, binding = 4) uniform samplerBuffer color_table;\n"
-        "layout(set = 0, binding = 5) uniform samplerBuffer texscale;\n"
-        "layout(set = 0, binding = 6) uniform samplerBuffer texgen;\n"
-      #endif
-
-      // per-buffer data
-      "layout(set = 0, binding = 1) uniform ChunkUBO { vec3 transform[3]; } cubo;\n"
-
       // per-frame data
-      "layout(set = 0, binding = 2) uniform PerspectiveUBO {\n"
+      "layout(set = 0, binding = 1) uniform FrameUBO {\n"
     #ifndef STBVOX_CONFIG_MULTIVIEW
       "vec4 camera_pos;\n"  // 4th value is used for arbitrary hacking
     #else
@@ -1740,7 +1729,26 @@ static const char *stbvox_vertex_program =
        "mat4x4 model_view[2];\n"
       #endif
     #endif
-      "} pubo;\n"
+      "} fubo;\n"
+
+      // per-buffer data
+      "layout(set = 0, binding = 2) uniform InstanceUBO { vec3 transform[3]; } iubo;\n"
+
+      #ifndef STBVOX_ICONFIG_UNTEXTURED
+         // generally constant data
+         #ifndef STBVOX_CONFIG_SIMPLE_TEXTURE
+         "layout(set = 0, binding = 3) uniform sampler2DArray tex_array[2];\n"
+         #else
+         "layout(set = 0, binding = 3) uniform sampler2D tex_array;\n"
+         #endif
+      #endif
+
+      #ifdef STBVOX_CONFIG_PREFER_TEXBUFFER
+        "layout(set = 0, binding = 4) uniform samplerBuffer color_table;\n"
+        "layout(set = 0, binding = 5) uniform samplerBuffer texscale;\n"
+        "layout(set = 0, binding = 6) uniform samplerBuffer texgen;\n"
+      #endif
+
 
       // fragment output data
       "layout(location = 0) flat out uvec4  facedata;\n"
@@ -1768,22 +1776,22 @@ static const char *stbvox_vertex_program =
       "   texlerp  = float( (attr_vertex >> 29u)        ) /  7.0;\n"      // a[29..31]
 
       "   vnormal = subo.normal_table[(facedata.w>>2u) & 31u];\n"
-      "   voxelspace_pos = offset * cubo.transform[0];\n"  // mesh-to-object scale
-      "   vec3 position  = voxelspace_pos + cubo.transform[1];\n"  // mesh-to-object translate
+      "   voxelspace_pos = offset * iubo.transform[0];\n"  // mesh-to-object scale
+      "   vec3 position  = voxelspace_pos + iubo.transform[1];\n"  // mesh-to-object translate
 
       #ifdef STBVOX_DEBUG_TEST_NORMALS
          "   if ((facedata.w & 28u) == 16u || (facedata.w & 28u) == 24u)\n"
         #ifndef STBVOX_CONFIG_MULTIVIEW
-         "      position += vnormal.xyz * pubo.camera_pos.w;\n"
+         "      position += vnormal.xyz * fubo.camera_pos.w;\n"
         #else
-         "      position += vnormal.xyz * pubo.camera_pos[gl_ViewIndex].w;\n"
+         "      position += vnormal.xyz * fubo.camera_pos[gl_ViewIndex].w;\n"
         #endif
       #endif
 
       #ifndef STBVOX_CONFIG_MULTIVIEW
-       "   gl_Position = pubo.model_view * vec4(position,1.0);\n"
+       "   gl_Position = fubo.model_view * vec4(position,1.0);\n"
       #else
-       "   gl_Position = pubo.model_view[gl_ViewIndex] * vec4(position,1.0);\n"
+       "   gl_Position = fubo.model_view[gl_ViewIndex] * vec4(position,1.0);\n"
       #endif
 
       "}\n"
@@ -1825,7 +1833,11 @@ static const char *stbvox_fragment_program =
 
       #ifndef STBVOX_ICONFIG_UNTEXTURED
          // generally constant data
+         #ifndef STBVOX_CONFIG_SIMPLE_TEXTURE
          "uniform sampler2DArray tex_array[2];\n"
+         #else
+         "uniform sampler2D tex_array;\n"
+         #endif
 
          #ifdef STBVOX_CONFIG_PREFER_TEXBUFFER
             "uniform samplerBuffer color_table;\n"
@@ -1896,7 +1908,11 @@ static const char *stbvox_fragment_program =
          "   texcoord_1 = texcoord_1 - floor(texcoord_1);\n"
          "   vec4 tex1 = textureGrad(tex_array[0], vec3(texcoord_1, float(tex1_id)), dFdx(tex1_scale*texcoord), dFdy(tex1_scale*texcoord));\n"
          #else
+            #ifndef STBVOX_CONFIG_SIMPLE_TEXTURE
          "   vec4 tex1 = texture(tex_array[0], vec3(texcoord_1, float(tex1_id)));\n"
+            #else
+         "   vec4 tex1 = texture(tex_array, texcoord_1);\n"
+            #endif
          #endif
 
          #ifndef STBVOX_CONFIG_DISABLE_TEX2
@@ -2039,22 +2055,8 @@ static const char *stbvox_fragment_program =
       #endif
       "} subo;\n"
 
-      #ifndef STBVOX_ICONFIG_UNTEXTURED
-         // generally constant data
-         "layout(set = 0, binding = 3) uniform sampler2DArray tex_array[2];\n"
-      #endif
-
-      #ifdef STBVOX_CONFIG_PREFER_TEXBUFFER
-        "layout(set = 0, binding = 4) uniform samplerBuffer color_table;\n"
-        "layout(set = 0, binding = 5) uniform samplerBuffer texscale;\n"
-        "layout(set = 0, binding = 6) uniform samplerBuffer texgen;\n"
-      #endif
-
-      // per-buffer data
-      "layout(set = 0, binding = 1) uniform ChunkUBO { vec3 transform[3]; } cubo;\n"
-
       // per-frame data
-      "layout(set = 0, binding = 2) uniform PerspectiveUBO {\n"
+      "layout(set = 0, binding = 1) uniform FrameUBO {\n"
     #ifndef STBVOX_CONFIG_MULTIVIEW
       "vec4 camera_pos;\n"  // 4th value is used for arbitrary hacking
     #else
@@ -2068,7 +2070,25 @@ static const char *stbvox_fragment_program =
        "mat4x4 model_view[2];\n"
       #endif
     #endif
-      "} pubo;\n"
+      "} fubo;\n"
+
+      // per-buffer data
+      "layout(set = 0, binding = 2) uniform InstanceUBO { vec3 transform[3]; } iubo;\n"
+
+      #ifndef STBVOX_ICONFIG_UNTEXTURED
+         // generally constant data
+          #ifndef STBVOX_CONFIG_SIMPLE_TEXTURE
+         "layout(set = 0, binding = 3) uniform sampler2DArray tex_array[2];\n"
+          #else
+         "layout(set = 0, binding = 3) uniform sampler2D tex_array;\n"
+          #endif
+      #endif
+
+      #ifdef STBVOX_CONFIG_PREFER_TEXBUFFER
+        "layout(set = 0, binding = 4) uniform samplerBuffer color_table;\n"
+        "layout(set = 0, binding = 5) uniform samplerBuffer texscale;\n"
+        "layout(set = 0, binding = 6) uniform samplerBuffer texgen;\n"
+      #endif
 
       "layout(location = 0) out vec4  outcolor;\n"
 
@@ -2115,7 +2135,7 @@ static const char *stbvox_fragment_program =
          "   bool texblend_mode = tex2_props.z != 0.0;\n"
          #endif
          "   vec2 texcoord;\n"
-         "   vec3 texturespace_pos = voxelspace_pos + cubo.transform[2].xyz;\n"
+         "   vec3 texturespace_pos = voxelspace_pos + iubo.transform[2].xyz;\n"
          "   texcoord.s = dot(texturespace_pos, texgen_s);\n"
          "   texcoord.t = dot(texturespace_pos, texgen_t);\n"
 
@@ -2128,7 +2148,11 @@ static const char *stbvox_fragment_program =
          "   texcoord_1 = texcoord_1 - floor(texcoord_1);\n"
          "   vec4 tex1 = textureGrad(tex_array[0], vec3(texcoord_1, float(tex1_id)), dFdx(tex1_scale*texcoord), dFdy(tex1_scale*texcoord));\n"
          #else
+            #ifndef STBVOX_CONFIG_SIMPLE_TEXTURE
          "   vec4 tex1 = texture(tex_array[0], vec3(texcoord_1, float(tex1_id)));\n"
+            #else
+         "   vec4 tex1 = texture(tex_array, texcoord_1);\n"
+            #endif
          #endif
 
          #ifndef STBVOX_CONFIG_DISABLE_TEX2
@@ -2193,7 +2217,7 @@ static const char *stbvox_fragment_program =
       "   vec3 lit_color;\n"
       "   if (!emissive)\n"
       #if defined(STBVOX_ICONFIG_LIGHTING) || defined(STBVOX_CONFIG_LIGHTING_SIMPLE)
-         "      lit_color = compute_lighting(voxelspace_pos + cubo.transform[1], normal, albedo, ambient_color);\n"
+         "      lit_color = compute_lighting(voxelspace_pos + iubo.transform[1], normal, albedo, ambient_color);\n"
       #else
          "      lit_color = albedo * ambient_color ;\n"
       #endif
@@ -2202,9 +2226,9 @@ static const char *stbvox_fragment_program =
 
       #if defined(STBVOX_ICONFIG_FOG) || defined(STBVOX_CONFIG_FOG_SMOOTHSTEP)
         #ifndef STBVOX_CONFIG_MULTIVIEW
-         "   vec3 dist = voxelspace_pos + (cubo.transform[1] - pubo.camera_pos.xyz);\n"
+         "   vec3 dist = voxelspace_pos + (iubo.transform[1] - fubo.camera_pos.xyz);\n"
         #else
-         "   vec3 dist = voxelspace_pos + (cubo.transform[1] - pubo.camera_pos[gl_ViewIndex].xyz);\n"
+         "   vec3 dist = voxelspace_pos + (iubo.transform[1] - fubo.camera_pos[gl_ViewIndex].xyz);\n"
         #endif
          "   lit_color = compute_fog(lit_color, dist, fragment_alpha);\n"
       #endif

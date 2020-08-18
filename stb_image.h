@@ -977,21 +977,21 @@ static int stbi__mad4sizes_valid(int a, int b, int c, int d, int add)
 static void *stbi__malloc_mad2(int a, int b, int add)
 {
    if (!stbi__mad2sizes_valid(a, b, add)) return NULL;
-   return stbi__malloc(a*b + add);
+   return stbi__malloc((size_t)a*(size_t)b + (size_t)add);
 }
 #endif
 
 static void *stbi__malloc_mad3(int a, int b, int c, int add)
 {
    if (!stbi__mad3sizes_valid(a, b, c, add)) return NULL;
-   return stbi__malloc(a*b*c + add);
+   return stbi__malloc((size_t)a*(size_t)b*(size_t)c + (size_t)add);
 }
 
 #if !defined(STBI_NO_LINEAR) || !defined(STBI_NO_HDR)
 static void *stbi__malloc_mad4(int a, int b, int c, int d, int add)
 {
    if (!stbi__mad4sizes_valid(a, b, c, d, add)) return NULL;
-   return stbi__malloc(a*b*c*d + add);
+   return stbi__malloc((size_t)a*(size_t)b*(size_t)c*(size_t)d + (size_t)add);
 }
 #endif
 
@@ -1115,7 +1115,7 @@ static stbi__uint16 *stbi__convert_8_to_16(stbi_uc *orig, int w, int h, int chan
    int img_len = w * h * channels;
    stbi__uint16 *enlarged;
 
-   enlarged = (stbi__uint16 *) stbi__malloc(img_len*2);
+   enlarged = (stbi__uint16 *) stbi__malloc((size_t)img_len*2);
    if (enlarged == NULL) return (stbi__uint16 *) stbi__errpuc("outofmem", "Out of memory");
 
    for (i = 0; i < img_len; ++i)
@@ -3753,7 +3753,7 @@ static stbi_uc *load_jpeg_image(stbi__jpeg *z, int *out_x, int *out_y, int *comp
 
          // allocate line buffer big enough for upsampling off the edges
          // with upsample factor of 4
-         z->img_comp[k].linebuf = (stbi_uc *) stbi__malloc(z->s->img_x + 3);
+         z->img_comp[k].linebuf = (stbi_uc *) stbi__malloc((size_t)z->s->img_x + 3);
          if (!z->img_comp[k].linebuf) { stbi__cleanup_jpeg(z); return stbi__errpuc("outofmem", "Out of memory"); }
 
          r->hs      = z->img_h_max / z->img_comp[k].h;
@@ -4326,7 +4326,7 @@ static int stbi__do_zlib(stbi__zbuf *a, char *obuf, int olen, int exp, int parse
 STBIDEF char *stbi_zlib_decode_malloc_guesssize(const char *buffer, int len, int initial_size, int *outlen)
 {
    stbi__zbuf a;
-   char *p = (char *) stbi__malloc(initial_size);
+   char *p = (char *) stbi__malloc((size_t)initial_size);
    if (p == NULL) return NULL;
    a.zbuffer = (stbi_uc *) buffer;
    a.zbuffer_end = (stbi_uc *) buffer + len;
@@ -4347,7 +4347,7 @@ STBIDEF char *stbi_zlib_decode_malloc(char const *buffer, int len, int *outlen)
 STBIDEF char *stbi_zlib_decode_malloc_guesssize_headerflag(const char *buffer, int len, int initial_size, int *outlen, int parse_header)
 {
    stbi__zbuf a;
-   char *p = (char *) stbi__malloc(initial_size);
+   char *p = (char *) stbi__malloc((size_t)initial_size);
    if (p == NULL) return NULL;
    a.zbuffer = (stbi_uc *) buffer;
    a.zbuffer_end = (stbi_uc *) buffer + len;
@@ -4374,7 +4374,7 @@ STBIDEF int stbi_zlib_decode_buffer(char *obuffer, int olen, char const *ibuffer
 STBIDEF char *stbi_zlib_decode_noheader_malloc(char const *buffer, int len, int *outlen)
 {
    stbi__zbuf a;
-   char *p = (char *) stbi__malloc(16384);
+   char *p = (char *) stbi__malloc((size_t)16384);
    if (p == NULL) return NULL;
    a.zbuffer = (stbi_uc *) buffer;
    a.zbuffer_end = (stbi_uc *) buffer+len;
@@ -5935,7 +5935,7 @@ static void *stbi__psd_load(stbi__context *s, int *x, int *y, int *comp, int req
       out = (stbi_uc *) stbi__malloc_mad3(8, w, h, 0);
       ri->bits_per_channel = 16;
    } else
-      out = (stbi_uc *) stbi__malloc(4 * w*h);
+      out = (stbi_uc *) stbi__malloc((size_t)4 * w*h);
 
    if (!out) return stbi__errpuc("outofmem", "Out of memory");
    pixelCount = w*h;
@@ -6515,9 +6515,9 @@ static stbi_uc *stbi__gif_load_next(stbi__context *s, stbi__gif *g, int *comp, i
       if (!stbi__mad3sizes_valid(4, g->w, g->h, 0))
          return stbi__errpuc("too large", "GIF image is too large");
       pcount = g->w * g->h;
-      g->out = (stbi_uc *) stbi__malloc(4 * pcount);
-      g->background = (stbi_uc *) stbi__malloc(4 * pcount);
-      g->history = (stbi_uc *) stbi__malloc(pcount);
+      g->out = (stbi_uc *) stbi__malloc((size_t)4 * pcount);
+      g->background = (stbi_uc *) stbi__malloc((size_t)4 * pcount);
+      g->history = (stbi_uc *) stbi__malloc((size_t)pcount);
       if (!g->out || !g->background || !g->history)
          return stbi__errpuc("outofmem", "Out of memory");
 
@@ -6712,9 +6712,9 @@ static void *stbi__load_gif_main(stbi__context *s, int **delays, int *x, int *y,
                   *delays = (int*) STBI_REALLOC( *delays, sizeof(int) * layers );
                }
             } else {
-               out = (stbi_uc*)stbi__malloc( layers * stride );
+               out = (stbi_uc*)stbi__malloc((size_t) layers * stride );
                if (delays) {
-                  *delays = (int*) stbi__malloc( layers * sizeof(int) );
+                  *delays = (int*) stbi__malloc((size_t) layers * sizeof(int) );
                }
             }
             memcpy( out + ((layers - 1) * stride), u, stride );
